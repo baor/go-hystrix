@@ -24,27 +24,29 @@ var buckets = []float64{
 	25,
 	50}
 
-var labels = []string{
-	"group",
-	"command"}
+var labelNames = []string{"group", "command"}
+var threadsCompleted = p8s.NewGaugeVec(p8s.GaugeOpts{Name: "app_hystrix_threads_completed"}, labelNames)
+var threadsActive = p8s.NewGaugeVec(p8s.GaugeOpts{Name: "app_hystrix_threads_active"}, labelNames)
+var commandConcurrentExecution = p8s.NewGaugeVec(p8s.GaugeOpts{Name: "app_hystrix_command_concurrentexecution"}, labelNames)
+var commandSuccess = p8s.NewGaugeVec(p8s.GaugeOpts{Name: "app_hystrix_command_success"}, labelNames)
+var commandFailure = p8s.NewGaugeVec(p8s.GaugeOpts{Name: "app_hystrix_command_failure"}, labelNames)
+var commandTimeout = p8s.NewGaugeVec(p8s.GaugeOpts{Name: "app_hystrix_command_timeout"}, labelNames)
+var commandShortCircuited = p8s.NewGaugeVec(p8s.GaugeOpts{Name: "app_hystrix_command_shortcorcuited"}, labelNames)
+var commandFallbackSuccess = p8s.NewGaugeVec(p8s.GaugeOpts{Name: "app_hystrix_command_fallbacksuccess"}, labelNames)
+var commandFallbackRejection = p8s.NewGaugeVec(p8s.GaugeOpts{Name: "app_hystrix_command_fallbackrejection"}, labelNames)
+var commandFallbackMissing = p8s.NewGaugeVec(p8s.GaugeOpts{Name: "app_hystrix_command_fallbackmissing"}, labelNames)
+var commandExceptionThrown = p8s.NewGaugeVec(p8s.GaugeOpts{Name: "app_hystrix_command_exceptionthrown"}, labelNames)
+var commandExecutionTimeSeconds = p8s.NewHistogramVec(p8s.HistogramOpts{Name: "app_hystrix_command_executiontime_seconds", Buckets: buckets}, labelNames)
+var threadExecutionTimeSeconds = p8s.NewHistogramVec(p8s.HistogramOpts{Name: "app_hystrix_thread_executiontime_seconds", Buckets: buckets}, labelNames)
 
-var threadsCompleted = p8s.NewGauge(p8s.GaugeOpts{Name: "app_hystrix_threads_completed"})
-var threadsActive = p8s.NewGauge(p8s.GaugeOpts{Name: "app_hystrix_threads_active"})
-var commandConcurrentExecution = p8s.NewGauge(p8s.GaugeOpts{Name: "app_hystrix_command_concurrentexecution"})
-var commandSuccess = p8s.NewGauge(p8s.GaugeOpts{Name: "app_hystrix_command_success"})
-var commandFailure = p8s.NewGauge(p8s.GaugeOpts{Name: "app_hystrix_command_failure"})
-var commandTimeout = p8s.NewGauge(p8s.GaugeOpts{Name: "app_hystrix_command_timeout"})
-var commandShortCircuited = p8s.NewGauge(p8s.GaugeOpts{Name: "app_hystrix_command_shortcorcuited"})
-var commandFallbackSuccess = p8s.NewGauge(p8s.GaugeOpts{Name: "app_hystrix_command_fallbacksuccess"})
-var commandFallbackRejection = p8s.NewGauge(p8s.GaugeOpts{Name: "app_hystrix_command_fallbackrejection"})
-var commandFallbackMissing = p8s.NewGauge(p8s.GaugeOpts{Name: "app_hystrix_command_fallbackmissing"})
-var commandExceptionThrown = p8s.NewGauge(p8s.GaugeOpts{Name: "app_hystrix_command_exceptionthrown"})
-var commandExecutionTimeSeconds = p8s.NewHistogram(p8s.HistogramOpts{Name: "app_hystrix_command_executiontime_seconds", Buckets: buckets})
-var threadExecutionTimeSeconds = p8s.NewHistogram(p8s.HistogramOpts{Name: "app_hystrix_thread_executiontime_seconds", Buckets: buckets})
+func init() {
+	p8s.MustRegister(threadsCompleted)
+	p8s.MustRegister(threadsActive)
+	p8s.MustRegister(commandConcurrentExecution)
+}
 
 type hystrixCircuitBreaker struct {
 	commands *hystrixCommands
-	metrics  *hystrixMetrics
 }
 
 type hystrixCommand struct {
@@ -57,6 +59,7 @@ type hystrixCommand struct {
 	lastHealthSnapshot            time.Time
 	healthSnapshot                *HystrixHealthSnapshot
 	metrics                       *CommandMetrics
+	labels                        []string
 }
 type hystrixCommands map[string]*hystrixCommand
 
@@ -89,39 +92,6 @@ func NewHystrixCommandOptions() *hystrixCommandOptions {
 		MetricsHealthSnapshotIntervalInMilliseconds:   500,
 		MetricsRollingStatisticalWindowInMilliseconds: 10000,
 		HystrixCommandEnabled:                         true}
-}
-
-var defaultBuckets = []float64{
-	0.05,
-	0.1,
-	0.3,
-	0.5,
-	0.7,
-	1,
-	1.5,
-	2,
-	3,
-	5,
-	8,
-	12,
-	17,
-	25,
-	50}
-
-type hystrixMetrics struct {
-	ThreadsCompleted           p8s.Gauge
-	ThreadsActive              p8s.Gauge
-	CommandConcurrentExecution p8s.Gauge
-	CommandSuccess             p8s.Gauge
-	CommandFailure             p8s.Gauge
-	CommandTimeout             p8s.Gauge
-	CommandShortCircuited      p8s.Gauge
-	CommandFallbackSuccess     p8s.Gauge
-	CommandFallbackRejection   p8s.Gauge
-	CommandFallbackMissing     p8s.Gauge
-	CommandExceptionThrown     p8s.Gauge
-	CommandExecutionTime       p8s.Histogram
-	ThreadExecutionTime        p8s.Histogram
 }
 
 type CommandMetrics struct {
@@ -233,6 +203,63 @@ func (hc *hystrixCommand) resetCounter() {
 	hc.lastHealthSnapshot = time.Now()
 	hc.healthSnapshot = &HystrixHealthSnapshot{errorCount: 0, errorPercentage: 0, totalCount: 0}
 	hc.healthMutex.Unlock()
+}
+
+func (hc *hystrixCommand) MarkSuccess() {
+	commandSuccess.WithLabelValues(hc.labels...).Inc()
+}
+
+func (hc *hystrixCommand) MarkFailure() {
+	commandFailure.WithLabelValues(hc.labels...).Inc()
+}
+
+func (hc *hystrixCommand) MarkTimeout() {
+	commandTimeout.WithLabelValues(hc.labels...).Inc()
+}
+
+func (hc *hystrixCommand) MarkShortCircuited() {
+	commandShortCircuited.WithLabelValues(hc.labels...).Inc()
+}
+
+func (hc *hystrixCommand) IncrementConcurrentExecutionCount() {
+	commandConcurrentExecution.WithLabelValues(hc.labels...).Inc()
+}
+
+func (hc *hystrixCommand) DecrementConcurrentExecutionCount() {
+	commandConcurrentExecution.WithLabelValues(hc.labels...).Inc()
+}
+
+func (hc *hystrixCommand) MarkFallbackSuccess() {
+	commandFallbackSuccess.WithLabelValues(hc.labels...).Inc()
+}
+
+func (hc *hystrixCommand) MarkFallbackRejection() {
+	commandFallbackRejection.WithLabelValues(hc.labels...).Inc()
+}
+
+func (hc *hystrixCommand) MarkFallbackMissing() {
+	commandFallbackMissing.WithLabelValues(hc.labels...).Inc()
+}
+
+func (hc *hystrixCommand) MarkExceptionThrown() {
+	commandExceptionThrown.WithLabelValues(hc.labels...).Inc()
+}
+
+func (hc *hystrixCommand) AddCommandExecutionTime(seconds float64) {
+	commandExecutionTimeSeconds.WithLabelValues(hc.labels...).Observe(seconds)
+}
+
+func (hc *hystrixCommand) AddUserThreadExecutionTime(seconds float64) {
+	threadExecutionTimeSeconds.WithLabelValues(hc.labels...).Observe(seconds)
+}
+
+func (hc *hystrixCommand) MarkThreadExecution() {
+	threadsActive.WithLabelValues(hc.labels...).Inc()
+}
+
+func (hc *hystrixCommand) MarkThreadCompletion() {
+	threadsActive.WithLabelValues(hc.labels...).Dec()
+	threadsCompleted.WithLabelValues(hc.labels...).Inc()
 }
 
 func main() {
